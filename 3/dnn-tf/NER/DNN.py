@@ -109,6 +109,16 @@ class DNN(object):
         if self.l2_regularization:
             tf.add_to_collection('total_loss', 0.5* utils.l2 * tf.nn.l2_loss(U))
         return {'W':W,'b1':b1,'U':U,'b2':b2,'embedding':embedding,'W2':W2,'b3':b3}
+    def get_parameter_number(self):
+        #self.weights
+        t = 0
+        for name,p in self.weights.items():
+            l = 1
+            for n in p.get_shape():
+                l*=n
+            t += l
+        return t
+
 
     def build_model(self,weights):
         window = tf.nn.embedding_lookup(weights['embedding'], self.input_placeholder)                
@@ -191,6 +201,9 @@ class DNN(object):
 
 def main():
     dnn =DNN()
+    t = dnn.get_parameter_number()
+    print("参数大小")
+    print(t)
     dnn.fit(250)
     dnn.dump('LossAndAcc.xlsx')
 
