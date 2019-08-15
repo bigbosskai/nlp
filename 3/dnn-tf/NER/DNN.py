@@ -6,6 +6,7 @@ import numpy as np
 from tensorflow.contrib.layers import xavier_initializer
 import pandas as pd 
 import time
+#author:bk
 
 f = open('result.txt','w')
 np.random.seed(12)
