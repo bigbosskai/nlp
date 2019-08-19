@@ -3,7 +3,10 @@ from torch.utils.data import DataLoader
 import torch
 import os 
 import re
-
+def get_parameter_number(net):
+    total_sum = sum(p.numel() for p in net.parameters())
+    trainable_sum = sum(p.numel() for p in net.parameters() if p.requires_grad)
+    return total_sum,trainable_sum
 class CONLL2003(data.Dataset):#
     def __init__(self,root):#./data
         self.train_path = os.path.join(root,'eng.train.bioes')

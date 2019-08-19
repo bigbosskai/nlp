@@ -3,10 +3,21 @@ import torch.autograd as autograd
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.optim import lr_scheduler
+import numpy as np 
 import sys
 from utils import CONLL2003
+import utils
 
-torch.manual_seed(1)#设置随机数种子
+torch.manual_seed(1997)#设置随机数种子
+np.random.seed(1997)
+
+class Config(object):
+    word_embed_size = 10
+    batch_size = 5 # 每批处理句子的数目
+    label_size = 17  # 类别数 y 的纬度
+    lstm_hidden_size = 20   # 
+    lr          = 0.2
 
 def argmax(vec):
     #返回python int
@@ -26,23 +37,25 @@ def log_sum_exp(vec):
 
 class BiLSTM_CRF(nn.Module):
 
-    def __init__(self, vocab_size, tag_to_ix, embedding_dim, hidden_dim):#这里的hidden_dim设置为偶数
+    def __init__(self, vocab_size, tag_to_ix):#这里的hidden_dim设置为偶数
         super(BiLSTM_CRF, self).__init__()
+        self.config = Config()
+
         self.vocab_size = vocab_size
         self.tag_to_ix = tag_to_ix
-        self.embedding_dim = embedding_dim
-        self.hidden_dim = hidden_dim
+        self.embedding_dim = self.config.word_embed_size
+        self.hidden_dim = self.config.lstm_hidden_size
         
         self.tagset_size = len(tag_to_ix)
 
         #设置embedding的矩阵
-        self.word_embeds = nn.Embedding(vocab_size, embedding_dim)
+        self.word_embeds = nn.Embedding(self.vocab_size, self.embedding_dim)
 
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim // 2,
+        self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim // 2,
                             num_layers=1, bidirectional=True)
         
         # 把LSTM的输出映射到label空间
-        self.hidden2tag = nn.Linear(hidden_dim, self.tagset_size)
+        self.hidden2tag = nn.Linear(self.hidden_dim, self.tagset_size)
 
         # 设置转移矩阵 shape是T*T,T已经包含START_TAG 和STOP_TAG在里面了
         self.transitions = nn.Parameter(
@@ -170,8 +183,7 @@ class BiLSTM_CRF(nn.Module):
 
 
 
-EMBEDDING_DIM = 5
-HIDDEN_DIM = 4
+
 START_TAG = "<START>"
 STOP_TAG = "<STOP>"
 
@@ -179,68 +191,73 @@ STOP_TAG = "<STOP>"
 dataset    = CONLL2003('./data')
 dataloader = DataLoader( dataset, batch_size=1, shuffle=False,num_workers=0, drop_last=False)
 
-
-# Make up some training data
-training_data = [(
-    "the wall street journal reported today that apple corporation made money".split(),
-    "B I I I O O O B I O O".split()
-), (
-    "georgia tech is a university in georgia".split(),
-    "B I O O O O B".split()
-)]
-
 word_to_ix = dataset.w2i
 
 tag_to_ix = dataset.t2i
 
 vocab_size = len(dataset.w2i)
 
-model = BiLSTM_CRF(  vocab_size, tag_to_ix, EMBEDDING_DIM, HIDDEN_DIM)
-optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+model = BiLSTM_CRF(  vocab_size, tag_to_ix)
+# optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+optimizer = optim.SGD(model.parameters(),lr= 0.2)
+scheduler = lr_scheduler.StepLR(optimizer,step_size=5,gamma = 0.96)
 
 
-def ACC(DATASET):
+total_sum,trainable_sum = utils.get_parameter_number(model)
+print("参数总数,训练参数")
+print(total_sum,trainable_sum)
+
+f=open('predict.txt','w')
+acc_list = []
+
+def eval(DATASET):
     test = DATASET.testa
+    tags_list = []
     ALL = 0.
     HIT = 0.
     with torch.no_grad():
         for sentence,labels in test:
             sent,tags = DATASET.gen_tensor(sentence,labels)
-            ptags = model(sent)[1]
+            ptags = model(sent)[1]#返回的是list
+            # 我要将其转化为string
+            Stags = [dataset.i2t[p] for p in ptags]
             ptags = torch.tensor(ptags, dtype=torch.long)
             correct = (tags==ptags).sum().item()
             HIT = HIT + correct
             ALL = ALL + len(sentence)
+            tags_list.extend(Stags)
+    s = ' '.join(tags_list)
+    s = s + '\n'
+    f.write(s)
+
+    print('\nTest: {}/{}'.format(HIT,ALL))
     return HIT/ALL
-
-
+acc = eval(dataset)
+acc_list.append(acc)
+epochs = 20
 # Make sure prepare_sequence from earlier in the LSTM section is loaded
-for epoch in range(300):
+for epoch in range(epochs):
+    scheduler.step()
     #在这里统计ACC
-    acc = ACC(dataset)
     print('\nEpoch:{} ACC:{}'.format(epoch,acc) )
     for i, data in enumerate(dataloader):
-        # Step 1. Remember that Pytorch accumulates gradients.
-        # We need to clear them out before each instance
         sys.stdout.write("Backward progress: %d/%d   \r" % (i,dataset.train_length))
         sentence,labels = data
-
         sentence = sentence.squeeze(0)
         labels   = labels.squeeze(0)
-
         model.zero_grad()
-        # Step 2. Get our inputs ready for the network, that is,
-        # turn them into Tensors of word indices.
-
-        # sentence_in = prepare_sequence(sentence, word_to_ix)
-        # targets = torch.tensor([tag_to_ix[t] for t in tags], dtype=torch.long)
-
-        # Step 3. Run our forward pass.
         loss = model.neg_log_likelihood(sentence, labels)
-
-        # Step 4. Compute the loss, gradients, and update the parameters by
-        # calling optimizer.step()
         loss.backward()
         optimizer.step()
-
-
+    acc=eval(dataset)
+    acc_list.append(acc)
+    print('\nEpoch:{} ACC:{}'.format(epoch,acc) )
+f.close()
+f1 = open('acc_and_loss.csv','w')
+f1.write('ACC\n')
+for a in acc_list:
+    s = str(a)+'\n'
+    f1.write(s)
+f1.close()
+print("保存模型")
+torch.save(net.state_dict(), "MODEL/bilstm-crf.pth")
